@@ -1,5 +1,5 @@
 # Virtual Environment
-venv/
+.venv/
 env/
 
 # Python cache files
@@ -27,6 +27,3 @@ tmp/
 
 # Python environment variables
 .env
-
-# Ignore model directory
-models/
