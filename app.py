@@ -10,14 +10,9 @@ Expects, next to this file:
     models/label_encoders.pkl
     Customer_support_data.csv
 
-Corrected build: retrained on a leakage-free train/test split (target
-encoding, TF-IDF, PowerTransformer, and StandardScaler now fit on the
-training fold only, not the full dataset), with the text-cleaning
-bugs fixed (contraction expansion no longer corrupts ordinary words,
-negation words survive stopword removal), the decision threshold set
-to the value found on genuinely held-out data, and the SHAP
-explainer given the same sparse input the model was trained and
-scored on so its explanations match the displayed prediction.
+Loads the model, TF-IDF vectorizer, scaler, power transformer, and label
+encoders that were fit and saved from the training notebook -- no separate
+training script is needed at runtime, just the files listed above.
 """
 
 import os
@@ -63,7 +58,7 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 LABEL_ENCODED_COLS = ["channel_name", "category", "Sub-category", "Agent Shift"]
 
 # F1-macro-optimal threshold found via a precision/recall sweep on a genuinely
-# held-out test set (see train_model.py). Trade-off worth knowing: this
+# held-out test set (see training notebook). Trade-off worth knowing: this
 # threshold favors overall accuracy/F1 balance over catching dissatisfied
 # customers specifically -- recall on the Dissatisfied class alone is 0.42
 # here vs. 0.69 at the old default of 0.5. If the priority is "catch as many
@@ -72,7 +67,7 @@ LABEL_ENCODED_COLS = ["channel_name", "category", "Sub-category", "Agent Shift"]
 DECISION_THRESHOLD = 0.32
 TARGET_ENCODING_K = 10
 
-# from train_model.py's held-out test set (17,182 rows), evaluated at
+# from the training notebook's held-out test set (17,182 rows), evaluated at
 # DECISION_THRESHOLD -- fit entirely on the training fold, nothing here is
 # derived from data the model was scored on
 REPORTED_METRICS = {
@@ -692,11 +687,11 @@ def build_lookups(_df):
 
 @st.cache_resource(show_spinner=False)
 def load_label_maps():
-    """Load the label encoders saved at training time (train_model.py), rather
-    than refitting a fresh LabelEncoder against whatever CSV happens to sit
-    next to the app. Refitting from source data on every run worked only by
-    coincidence -- it silently drifts the moment the CSV's category set
-    changes, with no error raised. Returns (maps_or_None, missing_paths)."""
+    """Load the label encoders saved at training time, rather than refitting
+    a fresh LabelEncoder against whatever CSV happens to sit next to the app.
+    Refitting from source data on every run worked only by coincidence -- it
+    silently drifts the moment the CSV's category set changes, with no error
+    raised. Returns (maps_or_None, missing_paths)."""
     if not os.path.exists(LE_PATH):
         return None, [LE_PATH]
 

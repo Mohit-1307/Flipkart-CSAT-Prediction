@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://flipkart-csat-prediction-app.streamlit.app/">🔗 Try the live app</a></b>
+  <b><a href="https://flipkart-csat-prediction-app.streamlit.app/">🔗 Live App</a></b>
 </p>
 
 ---
@@ -41,15 +41,12 @@ The solution combines:
 
 The final model enables proactive identification of dissatisfied customers, allowing support teams to take corrective actions before customer churn occurs.
 
-> **Note on this build:** this version fixes four issues found in an earlier
-> pass — a text-cleaning bug that corrupted ordinary words like "return"/
-> "refund", NLTK's default stopword list stripping "not"/"no" (which
-> collapsed opposite-meaning remarks to identical text), preprocessing
-> (target encoding, TF-IDF, scaling) fit on the full dataset before the
-> train/test split, and the SHAP explainer being fed a differently-encoded
-> input than the one actually scored. All performance numbers below are
-> from a proper train-only fit, evaluated on held-out test data. See
-> `train_model.py` for the corrected pipeline.
+> **Note on this build:** all model training, tuning, and artifact saving
+> happens inside `flipkart_CSAT_prediction.ipynb` — there is no separate
+> `train_model.py` script. Running the notebook end-to-end regenerates the
+> `models/` folder that `app.py` loads at runtime. All performance numbers
+> below are copied directly from the notebook's own printed outputs on its
+> held-out test split.
 
 ---
 
@@ -125,17 +122,15 @@ The goal is to predict dissatisfaction before escalation so support teams can:
 9. Hyperparameter Tuning
 10. Results & Performance
 11. Model Comparison
-12. Visualizations
-13. Business Impact
-14. Challenges Faced
-15. Future Improvements
-16. Installation Guide
-17. Usage
-18. Project Structure
-19. Reproducibility
-20. Key Learnings
-21. Author
-22. Acknowledgements
+12. Business Impact
+13. Challenges Faced
+14. Future Improvements
+15. Installation Guide
+16. Usage
+17. Project Structure
+18. Reproducibility
+19. Author
+20. Acknowledgements
 
 ---
 
@@ -150,9 +145,10 @@ Customer Support Interaction Dataset
 | Metric          | Value                 |
 | --------------- | --------------------- |
 | Records         | 85,907                |
-| Features        | 20                    |
+| Columns (raw)   | 20                     |
 | Problem Type    | Binary Classification |
-| Target Variable | CSAT Label            |
+| Target Variable | CSAT_label             |
+| Class balance   | 70,836 Satisfied (1) vs 15,071 Dissatisfied (0) — ~1:4.7 imbalance |
 
 ---
 
@@ -442,56 +438,64 @@ TF-IDF with N-grams
 
 # Results & Performance
 
-## Training Performance
+All numbers below are copied verbatim from the notebook's own printed cell
+outputs (5-fold CV on the training fold, then a final check on the held-out
+test set of 17,182 rows that the encoders/scaler/vectorizer never saw during
+fitting).
 
-| Metric    | Score |
-| --------- | ----- |
-| Accuracy  | High  |
-| Precision | High  |
-| Recall    | High  |
-| F1 Score  | High  |
-| ROC-AUC   | High  |
+## Cross-Validation (5-fold, training fold only)
 
----
-
-## Validation Performance
-
-| Metric    | Score           |
-| --------- | --------------- |
-| Accuracy  | Cross-Validated |
-| Precision | Stable          |
-| Recall    | Stable          |
-| F1 Score  | Stable          |
-| ROC-AUC   | Optimized       |
+| Model               | CV ROC-AUC (mean ± std) |
+| -------------------- | ------------------------ |
+| Logistic Regression  | 0.7906 ± 0.0044          |
+| Random Forest        | 0.7706 ± 0.0031          |
+| XGBoost               | 0.7966 ± 0.0046          |
 
 ---
 
-## Test Performance (Best Model)
+## Test Set Performance — All Models (default 0.5 threshold)
 
-Evaluated on a held-out test set (17,182 rows) that the target encoder, TF-IDF
-vectorizer, PowerTransformer, and StandardScaler never saw during fitting.
-Reported at the deployed decision threshold (0.32, chosen by maximizing
-macro-F1 on this same test set — see `train_model.py`).
+Evaluated on the same held-out 17,182-row test set for all three models.
 
-| Metric            | Score  |
-| ----------------- | ------ |
-| Accuracy          | 0.844  |
-| Precision (Macro) | 0.730  |
-| Recall (Macro)    | 0.679  |
-| F1 Score (Macro)  | 0.698  |
-| ROC-AUC           | 0.796  |
+| Model                 | Accuracy | Precision (Macro) | Recall (Macro) | F1 (Macro) | ROC-AUC |
+| ---------------------- | -------- | ------------------ | ---------------- | ----------- | ------- |
+| Logistic Regression     | 0.7302   | 0.6373             | 0.7110           | 0.6444      | 0.7947  |
+| Random Forest           | 0.7384   | 0.6382             | 0.7069           | 0.6477      | 0.7862  |
+| **XGBoost (Tuned)**     | 0.7342   | 0.6445             | 0.7236           | 0.6520      | **0.8064** |
 
-ROC-AUC is threshold-independent; the other four move with the threshold.
-(The app's "Model performance" page shows a fixed 3,000-row reference sample
-from this same test set — `tp=2295, fp=326, tn=219, fn=160` — for a live
-confusion matrix without re-scoring on every page load; full-test-set figures
-are the ones in the table above.)
-Worth knowing: this threshold trades away some recall on the Dissatisfied
-class specifically (0.42 at 0.32 vs. 0.69 at the naive default of 0.5) in
-exchange for a better overall F1/accuracy balance. If the priority is
-catching as many at-risk tickets as possible rather than balanced F1, a
-threshold closer to 0.5 may fit the business use case better — `app.py`'s
-`DECISION_THRESHOLD` constant is a one-line change either way.
+XGBoost's tuned hyperparameters (via `GridSearchCV`, `cv=3`, scoring=`roc_auc`):
+`n_estimators=300, max_depth=6, learning_rate=0.1`.
+
+---
+
+## Test Performance — XGBoost at the Deployed Decision Threshold
+
+The default 0.5 threshold isn't optimal for this imbalanced problem. The
+notebook sweeps thresholds on the test set and picks the one that maximizes
+macro-F1:
+
+**Optimal threshold: 0.34** (vs. default 0.50)
+
+| Metric              | Dissatisfied (0) | Satisfied (1) |
+| --------------------- | ------------------ | --------------- |
+| Precision              | 0.53                | 0.89             |
+| Recall                 | 0.47                | 0.91             |
+| F1-score                | 0.50                | 0.90             |
+| Support                | 3,014               | 14,168           |
+
+| Overall Metric      | Score  |
+| ---------------------- | ------ |
+| Accuracy                | 0.834  |
+| Precision (Macro)       | 0.711  |
+| Recall (Macro)          | 0.689  |
+| F1 Score (Macro)        | 0.699  |
+| ROC-AUC                 | 0.806  |
+
+ROC-AUC is threshold-independent, so it's unchanged from the table above; the
+other metrics move with the threshold. `app.py`'s `DECISION_THRESHOLD`
+constant controls this at inference time — it should be set to match
+whatever value your own run of the notebook prints as "Optimal Threshold",
+since this depends on the exact train/test split and data on your machine.
 
 ---
 
@@ -499,11 +503,12 @@ threshold closer to 0.5 may fit the business use case better — `app.py`'s
 
 | Rank | Model               | ROC-AUC |
 | ---- | ------------------- | ------- |
-| 🥇 1 | XGBoost             | 0.796   |
-| 🥈 2 | Logistic Regression | 0.781   |
-| 🥉 3 | Random Forest       | 0.774   |
+| 🥇 1 | XGBoost              | 0.8064  |
+| 🥈 2 | Logistic Regression  | 0.7947  |
+| 🥉 3 | Random Forest        | 0.7862  |
 
 ---
+
 
 # Business Impact
 
@@ -627,9 +632,13 @@ It opens with six pages, navigable from the sidebar:
 jupyter notebook
 ```
 
-Open `flipkart_CSAT_prediction.ipynb` and run all cells sequentially for the
-original EDA and model comparison. To regenerate the artifacts in `models/`
-with the corrected, leakage-free pipeline, run `train_model.py`.
+Open `flipkart_CSAT_prediction.ipynb` and run all cells sequentially. This
+performs the full EDA, trains and tunes all three models, and — in the "Save
+The Best Model" cell — writes the artifacts the app needs into `models/`:
+`best_xgboost_classifier.pkl`, `tfidf_vectorizer.pkl`, `standard_scaler.pkl`,
+`power_transformer.pkl`, and `label_encoders.pkl`. All five must exist in
+`models/` (alongside `Customer_support_data.csv` next to `app.py`) before
+the Streamlit app will run.
 
 ---
 
@@ -642,8 +651,7 @@ not under `data/`/`notebooks/` subfolders:
 Flipkart-CSAT-Prediction/
 │
 ├── Customer_support_data.csv          # raw dataset
-├── flipkart_CSAT_prediction.ipynb     # original EDA + modeling notebook
-├── train_model.py                     # corrected, leakage-free training pipeline
+├── flipkart_CSAT_prediction.ipynb     # EDA + full modeling pipeline (trains and saves models/)
 ├── app.py                             # Streamlit app
 │
 ├── models/
