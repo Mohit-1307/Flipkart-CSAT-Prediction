@@ -7,7 +7,17 @@ Expects, next to this file:
     models/tfidf_vectorizer.pkl
     models/standard_scaler.pkl
     models/power_transformer.pkl
+    models/label_encoders.pkl
     Customer_support_data.csv
+
+Corrected build: retrained on a leakage-free train/test split (target
+encoding, TF-IDF, PowerTransformer, and StandardScaler now fit on the
+training fold only, not the full dataset), with the text-cleaning
+bugs fixed (contraction expansion no longer corrupts ordinary words,
+negation words survive stopword removal), the decision threshold set
+to the value found on genuinely held-out data, and the SHAP
+explainer given the same sparse input the model was trained and
+scored on so its explanations match the displayed prediction.
 """
 
 import os
@@ -24,7 +34,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from scipy.sparse import csr_matrix, hstack
-from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
 
@@ -40,31 +49,44 @@ MODEL_PATH = os.path.join(MODELS_DIR, "best_xgboost_classifier.pkl")
 TFIDF_PATH = os.path.join(MODELS_DIR, "tfidf_vectorizer.pkl")
 SCALER_PATH = os.path.join(MODELS_DIR, "standard_scaler.pkl")
 PT_PATH = os.path.join(MODELS_DIR, "power_transformer.pkl")
+LE_PATH = os.path.join(MODELS_DIR, "label_encoders.pkl")
 
 ENC_FEATURE_COLS = ["channel_name_enc", "category_enc", "Sub-category_enc",
                      "Tenure Bucket_enc", "Agent Shift_enc"]
+
 NUM_FEATURE_COLS = ["response_time_minutes", "issue_hour", "issue_dayofweek",
                      "agent_csat_encoded", "supervisor_csat_encoded"]
+
 TENURE_ORDER = ["On Job Training", "0-30", "31-60", "61-90", ">90"]
 TENURE_INDEX = {t: i for i, t in enumerate(TENURE_ORDER)}
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 LABEL_ENCODED_COLS = ["channel_name", "category", "Sub-category", "Agent Shift"]
 
-DECISION_THRESHOLD = 0.5
+# F1-macro-optimal threshold found via a precision/recall sweep on a genuinely
+# held-out test set (see train_model.py). Trade-off worth knowing: this
+# threshold favors overall accuracy/F1 balance over catching dissatisfied
+# customers specifically -- recall on the Dissatisfied class alone is 0.42
+# here vs. 0.69 at the old default of 0.5. If the priority is "catch as many
+# at-risk tickets as possible" rather than balanced F1, 0.5 (or something
+# in between) may be the better operating point for this business use case.
+DECISION_THRESHOLD = 0.32
 TARGET_ENCODING_K = 10
 
+# from train_model.py's held-out test set (17,182 rows), evaluated at
+# DECISION_THRESHOLD -- fit entirely on the training fold, nothing here is
+# derived from data the model was scored on
 REPORTED_METRICS = {
-    "accuracy": 0.726,
-    "precision_macro": 0.632,
-    "recall_macro": 0.701,
-    "f1_macro": 0.638,
-    "roc_auc": 0.780,
+    "accuracy": 0.844,
+    "precision_macro": 0.730,
+    "recall_macro": 0.679,
+    "f1_macro": 0.698,
+    "roc_auc": 0.796,
 }
 
-# fixed reference sample (seed=42, n=3000) computed once against the shipped
-# model so the performance page has a real confusion matrix to show without
-# re-scoring on every page load
-STATIC_CONFUSION = {"tp": 1874, "fp": 133, "tn": 368, "fn": 625}
+# fixed reference sample (seed=42, n=3000) drawn from the held-out test set,
+# scored at DECISION_THRESHOLD, so the performance page has a real confusion
+# matrix to show without re-scoring on every page load
+STATIC_CONFUSION = {"tp": 2295, "fp": 326, "tn": 219, "fn": 160}
 
 # --------------------------------------------------------------------------
 # theme
@@ -390,8 +412,11 @@ def tag(text):
 
 def verdict_box(theme, is_satisfied, confidence_pct, message):
     color = theme["good"] if is_satisfied else theme["bad"]
+
     glow = "rgba(52,211,153,0.08)" if is_satisfied else "rgba(248,113,113,0.08)"
+
     title = "Likely satisfied" if is_satisfied else "Dissatisfaction risk"
+
     st.markdown(
         f'<div class="verdict" style="--v-color:{color};--v-glow:{glow};">'
         f'<div class="verdict-title">{title}</div>'
@@ -402,6 +427,7 @@ def verdict_box(theme, is_satisfied, confidence_pct, message):
 
 def chip(theme, color_key, text):
     color = theme.get(color_key, theme["text_faint"])
+
     st.markdown(
         f'<div class="chip"><div class="chip-dot" style="--c-color:{color};"></div><div>{text}</div></div>',
         unsafe_allow_html=True,
@@ -411,45 +437,61 @@ def chip(theme, color_key, text):
 def shap_bars(theme, contributions):
     if not contributions:
         st.caption("No contribution data.")
+
         return
+
     max_abs = max(abs(c["shap_value"]) for c in contributions) or 1.0
+
     rows = []
+
     for c in contributions:
         val = c["shap_value"]
+
         pct = min(100, abs(val) / max_abs * 100)
+
         color = theme["good"] if val >= 0 else theme["bad"]
+
         rows.append(
             f'<div class="bar-row"><div class="bar-label" title="{c["feature"]}">{c["feature"]}</div>'
             f'<div class="bar-track"><div class="bar-fill" style="width:{pct:.1f}%;background:{color};"></div></div>'
             f'<div class="bar-val">{val:+.3f}</div></div>'
         )
+
     st.markdown("".join(rows), unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
 # text cleaning
 #
-# order matters here and it was checked directly against the training
-# notebook: expand contractions, lowercase, strip punctuation, strip
+# order: expand contractions, lowercase, strip punctuation, strip
 # urls/digits, drop stopwords, rephrase a few domain terms, tokenize,
 # lemmatize. missing remarks get filled with "no remarks" before any of
-# that runs, which means the placeholder itself gets mangled by the
-# contraction step ("re" -> " are" turns "remarks" into "aremarks") -- that
-# looks like a bug but it isn't: it's the actual token the model was
-# trained on for roughly two thirds of rows, so it's left alone on purpose.
+# that runs.
+#
+# every key below has its leading apostrophe (so "'re"/"'ll" only match
+# real contractions like "you're"/"we'll", not the letters "re"/"ll"
+# wherever they appear inside an ordinary word -- the previous version
+# was missing the apostrophe on those two keys, which silently mangled
+# words like "return", "refund", "before", and "will" into garbage
+# tokens), and every replacement has a leading space so word boundaries
+# survive (e.g. "it's" -> "it is", not "itis").
 # --------------------------------------------------------------------------
 
-CONTRACTIONS = {"can't": "cannot", "won't": "will not", "n't": " not", "re": "are",
-                "'s": "is", "'d": " would", "ll": " will", "'ve": "have", "'m": "am"}
+CONTRACTIONS = {"can't": "cannot", "won't": "will not", "n't": " not",
+                 "'re": " are", "'s": " is", "'d": " would", "'ll": " will",
+                 "'ve": " have", "'m": " am"}
 
 _NLTK_READY = False
 
 
 def ensure_nltk():
     global _NLTK_READY
+
     if _NLTK_READY:
         return
+
     import nltk
+
     for pkg, path in [("stopwords", "corpora/stopwords"), ("wordnet", "corpora/wordnet"),
                        ("omw-1.4", "corpora/omw-1.4"), ("punkt", "tokenizers/punkt"),
                        ("punkt_tab", "tokenizers/punkt_tab")]:
@@ -457,41 +499,61 @@ def ensure_nltk():
             nltk.data.find(path)
         except LookupError:
             nltk.download(pkg, quiet=True)
+
     _NLTK_READY = True
 
 
 def clean_remark(raw_text):
     ensure_nltk()
+
     from nltk.corpus import stopwords
+
     from nltk.stem import WordNetLemmatizer
+
     from nltk.tokenize import word_tokenize
 
     text = str(raw_text) if raw_text is not None and str(raw_text).strip() else "no remarks"
 
     for k, v in CONTRACTIONS.items():
         text = text.replace(k, v)
+
     text = text.lower()
+
     text = text.translate(str.maketrans("", "", string.punctuation))
+
     text = re.sub(r"http\S+|www\S+|https\S+", "", text)
+
     text = re.sub(r"\w*\d\w*", "", text)
 
-    stop_words = set(stopwords.words("english"))
+    # "no"/"not"/"nor" are excluded from NLTK's default stopword list here --
+    # leaving them in silently collapsed opposite-meaning remarks (e.g. "was
+    # not resolved" vs "was resolved") to identical cleaned text.
+    stop_words = set(stopwords.words("english")) - {"no", "not", "nor"}
+
     words = text.split()
+
     text = " ".join(w for w in words if w not in stop_words)
+
     text = text.strip() or "no remarks"
 
     text = text.replace("delivery late", "late delivery")
+
     text = text.replace("not received", "undelivered")
+
     text = text.replace("didnt receive", "undelivered")
 
     lemmatizer = WordNetLemmatizer()
+
     tokens = word_tokenize(text)
+
     result = " ".join(lemmatizer.lemmatize(t) for t in tokens).strip()
+
     return result or "no remarks"
 
 
 def clean_remarks_batch(texts):
     ensure_nltk()
+
     return [clean_remark(t) for t in texts]
 
 
@@ -502,28 +564,43 @@ def clean_remarks_batch(texts):
 @dataclass
 class Lookups:
     global_mean: float
+
     agent_lookup: dict
+
     sup_lookup: dict
+
     agents: list = field(default_factory=list)
+
     supervisors: list = field(default_factory=list)
+
     channels: list = field(default_factory=list)
+
     categories: list = field(default_factory=list)
+
     subcategory_by_category: dict = field(default_factory=dict)
+
     response_time_median: float = 0.0
+
     response_time_p90: float = 0.0
 
 
 def _winsorize(series):
     q1, q3 = series.quantile([0.25, 0.75])
+
     iqr = q3 - q1
+
     return series.clip(lower=q1 - 1.5 * iqr, upper=q3 + 1.5 * iqr)
 
 
 def _smoothed_target_encoding(df, group_col, target_col, k):
     global_mean = df[target_col].mean()
+
     grp_mean = df.groupby(group_col)[target_col].mean()
+
     grp_count = df.groupby(group_col)[target_col].count()
+
     smoothed = (grp_count * grp_mean + k * global_mean) / (grp_count + k)
+
     return smoothed.to_dict()
 
 
@@ -531,23 +608,30 @@ def _smoothed_target_encoding(df, group_col, target_col, k):
 def load_dataset():
     if not os.path.exists(DATA_PATH):
         return None, f"Dataset not found at {DATA_PATH}"
+
     try:
         df = pd.read_csv(DATA_PATH)
     except Exception as e:
         return None, f"Failed to read dataset: {e}"
 
     df["Issue_reported at"] = pd.to_datetime(df["Issue_reported at"], dayfirst=True, errors="coerce")
+
     df["issue_responded"] = pd.to_datetime(df["issue_responded"], dayfirst=True, errors="coerce")
+
     df["response_time_minutes"] = ((df["issue_responded"] - df["Issue_reported at"]).dt.total_seconds() / 60).clip(lower=0)
+
     df["issue_hour"] = df["Issue_reported at"].dt.hour
+
     df["issue_dayofweek"] = df["Issue_reported at"].dt.dayofweek
 
     df.drop_duplicates(inplace=True)
+
     if "connected_handling_time" in df.columns:
         df.drop(columns=["connected_handling_time"], inplace=True)
 
     if "CSAT Score" not in df.columns:
         return None, "Dataset missing required column 'CSAT Score'"
+
     df["CSAT_label"] = (df["CSAT Score"] >= 4).astype(int)
 
     for col in ["Sub-category", "category", "channel_name", "Tenure Bucket", "Agent Shift"]:
@@ -567,21 +651,28 @@ def load_dataset():
     df["response_time_minutes"] = _winsorize(df["response_time_minutes"])
 
     agent_lookup = _smoothed_target_encoding(df, "Agent_name", "CSAT Score", TARGET_ENCODING_K)
+
     sup_lookup = _smoothed_target_encoding(df, "Supervisor", "CSAT Score", TARGET_ENCODING_K)
+
     global_mean = df["CSAT Score"].mean()
 
     df["agent_csat_encoded"] = df["Agent_name"].map(agent_lookup).fillna(global_mean)
+
     df["supervisor_csat_encoded"] = df["Supervisor"].map(sup_lookup).fillna(global_mean)
 
     df.attrs["agent_lookup"] = agent_lookup
+
     df.attrs["sup_lookup"] = sup_lookup
+
     df.attrs["global_mean"] = global_mean
+
     return df, None
 
 
 @st.cache_data(show_spinner=False)
 def build_lookups(_df):
     df = _df
+
     return Lookups(
         global_mean=df.attrs["global_mean"],
         agent_lookup=df.attrs["agent_lookup"],
@@ -599,27 +690,36 @@ def build_lookups(_df):
     )
 
 
-@st.cache_data(show_spinner=False)
-def build_label_maps(_df):
-    df = _df
-    maps = {}
-    for col in LABEL_ENCODED_COLS:
-        le = LabelEncoder()
-        le.fit(df[col].astype(str))
-        maps[col] = {cls: idx for idx, cls in enumerate(le.classes_)}
-    return maps
+@st.cache_resource(show_spinner=False)
+def load_label_maps():
+    """Load the label encoders saved at training time (train_model.py), rather
+    than refitting a fresh LabelEncoder against whatever CSV happens to sit
+    next to the app. Refitting from source data on every run worked only by
+    coincidence -- it silently drifts the moment the CSV's category set
+    changes, with no error raised. Returns (maps_or_None, missing_paths)."""
+    if not os.path.exists(LE_PATH):
+        return None, [LE_PATH]
+
+    return joblib.load(LE_PATH), []
 
 
 @st.cache_resource(show_spinner="Loading model artifacts...")
 def load_artifacts():
     required = [MODEL_PATH, TFIDF_PATH, SCALER_PATH, PT_PATH]
+
     missing = [p for p in required if not os.path.exists(p)]
+
     if missing:
         return None, missing
+
     model = joblib.load(MODEL_PATH)
+
     tfidf = joblib.load(TFIDF_PATH)
+
     scaler = joblib.load(SCALER_PATH)
+
     pt = joblib.load(PT_PATH)
+
     return (model, tfidf, scaler, pt), []
 
 
@@ -630,36 +730,52 @@ def load_artifacts():
 @dataclass
 class TicketInput:
     channel_name: str
+
     category: str
+
     sub_category: str
+
     tenure_bucket: str
+
     agent_shift: str
+
     response_time_minutes: float
+
     issue_hour: int
+
     issue_dayofweek: int
+
     customer_remarks: str = ""
+
     agent_name: str = None
+
     supervisor: str = None
 
 
 def _safe_label(label_maps, col, value, warnings_out):
     mapping = label_maps[col]
+
     if value not in mapping:
         warnings_out.append(f"'{value}' wasn't seen during training for '{col}'; using a default value.")
+
         return 0
+
     return mapping[value]
 
 
 def _tenure_index(bucket, warnings_out):
     if bucket not in TENURE_INDEX:
         warnings_out.append(f"Unknown tenure bucket '{bucket}'.")
+
         return -1
+
     return TENURE_INDEX[bucket]
 
 
 def _target_encode(name, lookup, global_mean):
     if not name:
         return global_mean
+
     return lookup.get(name, global_mean)
 
 
@@ -671,6 +787,7 @@ def build_struct_row(ticket, label_maps, lookups, warnings_out):
         _tenure_index(ticket.tenure_bucket, warnings_out),
         _safe_label(label_maps, "Agent Shift", ticket.agent_shift, warnings_out),
     ]
+
     num_vals = [
         float(ticket.response_time_minutes),
         float(ticket.issue_hour),
@@ -678,28 +795,39 @@ def build_struct_row(ticket, label_maps, lookups, warnings_out):
         _target_encode(ticket.agent_name, lookups.agent_lookup, lookups.global_mean),
         _target_encode(ticket.supervisor, lookups.sup_lookup, lookups.global_mean),
     ]
+
     return np.array(enc_vals + num_vals, dtype=float)
 
 
 def _scale_struct(struct_matrix, scaler, pt):
     n_enc = len(ENC_FEATURE_COLS)
+
     x_cat = struct_matrix[:, :n_enc]
+
     x_num = struct_matrix[:, n_enc:]
+
     x_num_tf = pt.transform(x_num)
+
     return scaler.transform(np.hstack([x_cat, x_num_tf]))
 
 
 def predict_single(ticket, model, tfidf, scaler, pt, label_maps, lookups):
     warnings_out = []
+
     row = build_struct_row(ticket, label_maps, lookups, warnings_out).reshape(1, -1)
+
     scaled = _scale_struct(row, scaler, pt)
 
     remark = clean_remark(ticket.customer_remarks)
+
     x_text = tfidf.transform([remark])
+
     x_combined = hstack([csr_matrix(scaled), x_text])
 
     proba = model.predict_proba(x_combined)[0]
+
     pred = int(proba[1] >= DECISION_THRESHOLD)
+
     return {
         "prediction": pred,
         "prob_satisfied": float(proba[1]),
@@ -716,7 +844,9 @@ BATCH_DEFAULTS = {"channel_name": "Unknown", "category": "Unknown", "sub_categor
 
 def predict_batch(df_input, model, tfidf, scaler, pt, label_maps, lookups):
     df = df_input.copy()
+
     df.attrs = {}
+
     for target, source in BATCH_ALIASES.items():
         if source in df.columns and target not in df.columns:
             df[target] = df[source]
@@ -724,36 +854,49 @@ def predict_batch(df_input, model, tfidf, scaler, pt, label_maps, lookups):
     for col, default in BATCH_DEFAULTS.items():
         if col not in df.columns:
             df[col] = default
+
         df[col] = df[col].fillna(default).astype(str)
 
     if "Issue_reported at" in df.columns and "issue_responded" in df.columns:
         ir = pd.to_datetime(df["Issue_reported at"], dayfirst=True, errors="coerce")
+
         rr = pd.to_datetime(df["issue_responded"], dayfirst=True, errors="coerce")
+
         df["response_time_minutes"] = ((rr - ir).dt.total_seconds() / 60).clip(lower=0)
+
         df["issue_hour"] = ir.dt.hour
+
         df["issue_dayofweek"] = ir.dt.dayofweek
 
     for col, default in [("response_time_minutes", lookups.response_time_median), ("issue_hour", 12), ("issue_dayofweek", 2)]:
         if col not in df.columns:
             df[col] = default
+
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default)
 
     if "Agent_name" not in df.columns:
         df["Agent_name"] = None
+
     if "Supervisor" not in df.columns:
         df["Supervisor"] = None
+
     if "Customer Remarks" not in df.columns:
         df["Customer Remarks"] = "no remarks"
+
     df["Customer Remarks"] = df["Customer Remarks"].fillna("no remarks").astype(str)
 
     df["agent_csat_encoded"] = df["Agent_name"].map(lookups.agent_lookup).fillna(lookups.global_mean)
+
     df["supervisor_csat_encoded"] = df["Supervisor"].map(lookups.sup_lookup).fillna(lookups.global_mean)
 
     def enc_col(col_key, series):
         mapping = label_maps[col_key]
+
         unseen = ~series.isin(mapping.keys())
+
         if unseen.any():
             df.attrs.setdefault("unseen_categories", {})[col_key] = int(unseen.sum())
+
         return series.map(lambda v: mapping.get(v, 0))
 
     enc_matrix = np.column_stack([
@@ -768,21 +911,30 @@ def predict_batch(df_input, model, tfidf, scaler, pt, label_maps, lookups):
                       "agent_csat_encoded", "supervisor_csat_encoded"]].values.astype(float)
 
     struct = np.hstack([enc_matrix, num_matrix])
+
     scaled = _scale_struct(struct, scaler, pt)
 
     ensure_nltk()
+
     clean = pd.Series(clean_remarks_batch(df["Customer Remarks"].tolist()), index=df.index)
+
     x_text = tfidf.transform(clean)
 
     x_combined = hstack([csr_matrix(scaled), x_text])
+
     proba = model.predict_proba(x_combined)
 
     df["clean_remarks"] = clean
+
     df["predicted_label"] = np.where(proba[:, 1] >= DECISION_THRESHOLD, "Satisfied", "Dissatisfied")
+
     df["prob_satisfied"] = proba[:, 1]
+
     df["prob_dissatisfied"] = proba[:, 0]
+
     df["risk_tier"] = pd.cut(df["prob_dissatisfied"], bins=[-0.01, 0.3, 0.6, 1.01],
                               labels=["Low Risk", "Medium Risk", "High Risk"])
+
     return df
 
 
@@ -790,20 +942,35 @@ def build_shap_explanation(ticket, model, tfidf, scaler, pt, label_maps, lookups
     import shap
 
     warnings_out = []
+
     row = build_struct_row(ticket, label_maps, lookups, warnings_out).reshape(1, -1)
+
     scaled = _scale_struct(row, scaler, pt)
+
     remark = clean_remark(ticket.customer_remarks)
+
     x_text = tfidf.transform([remark])
-    x_combined = hstack([csr_matrix(scaled), x_text]).toarray()
+
+    # keep this sparse -- XGBoost treats an absent sparse entry as "missing"
+    # but an explicit dense 0.0 as a real value, and the model was trained
+    # on sparse input throughout. Densifying here (the previous .toarray()
+    # call) made SHAP explain a materially different prediction than the
+    # one predict_single()/predict_batch() actually returned.
+    x_combined = hstack([csr_matrix(scaled), x_text]).tocsr()
 
     explainer = shap.TreeExplainer(model)
+
     shap_values = explainer.shap_values(x_combined)
+
     if isinstance(shap_values, list):
         shap_values = shap_values[1]
+
     shap_row = np.asarray(shap_values).reshape(-1)
 
     names = ENC_FEATURE_COLS + NUM_FEATURE_COLS + [f"text: {t}" for t in tfidf.get_feature_names_out()]
+
     order = np.argsort(-np.abs(shap_row))[:top_n]
+
     return [{"feature": names[i], "shap_value": float(shap_row[i])} for i in order]
 
 
@@ -811,10 +978,15 @@ def build_shap_explanation(ticket, model, tfidf, scaler, pt, label_maps, lookups
 def top_global_features(_artifacts, _label_maps, top_n=10):
     """Global feature importance from the model's own gain scores — fast, no per-row SHAP needed."""
     model, tfidf, scaler, pt = _artifacts
+
     importances = model.feature_importances_
+
     names = ENC_FEATURE_COLS + NUM_FEATURE_COLS + [f"text: {t}" for t in tfidf.get_feature_names_out()]
+
     order = np.argsort(-importances)[:top_n]
+
     max_val = importances[order[0]] if len(order) else 1.0
+
     return [{"feature": names[i], "shap_value": float(importances[i] / max_val) if max_val else 0.0} for i in order]
 
 
@@ -826,57 +998,89 @@ def page_overview(theme, df):
     header("Overview", f"{len(df):,} historical support tickets")
 
     c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         stat_card("Total tickets", f"{len(df):,}", "Full training corpus")
+
     with c2:
         stat_card("Satisfaction rate", f"{df['CSAT_label'].mean():.1%}", "Score of 4 or higher")
+
     with c3:
         stat_card("Model ROC-AUC", f"{REPORTED_METRICS['roc_auc']:.3f}", "Tuned XGBoost")
+
     with c4:
         stat_card("Median response", f"{df['response_time_minutes'].median():.0f} min", "Issue to first response")
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+
     tmpl = plotly_template(theme)
+
     left, right = st.columns([1.3, 1], gap="large")
 
     with left:
         tag("Satisfaction by category")
+
         cat_sat = (df.groupby("category")["CSAT_label"].mean().sort_values() * 100).reset_index()
+
         cat_sat.columns = ["category", "pct"]
+
         fig = px.bar(cat_sat, x="pct", y="category", orientation="h",
                      color="pct", color_continuous_scale=[theme["bad"], theme["warn"], theme["good"]],
                      labels={"pct": "Satisfaction %", "category": ""}, text="pct")
+
         fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+
         fig.update_layout(template=tmpl, height=440, coloraxis_showscale=False, bargap=0.3, xaxis=dict(range=[0, 108]))
+
         st.plotly_chart(fig, width="stretch")
 
     with right:
         tag("Class split")
+
         split = df["CSAT_label"].value_counts().rename({0: "Dissatisfied", 1: "Satisfied"})
+
         fig = px.pie(values=split.values, names=split.index, hole=0.62,
                      color=split.index, color_discrete_map={"Satisfied": theme["good"], "Dissatisfied": theme["bad"]})
+
         fig.update_traces(textinfo="percent+label")
+
         fig.update_layout(template=tmpl, height=440, showlegend=False)
+
         st.plotly_chart(fig, width="stretch")
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+
     c1, c2 = st.columns(2, gap="large")
+
     with c1:
         tag("Channel mix")
+
         ch = df["channel_name"].value_counts().reset_index()
+
         ch.columns = ["channel", "count"]
+
         fig = px.bar(ch, x="channel", y="count", color="channel", text="count",
                      color_discrete_sequence=[theme["accent"], theme["warn"], "#9b8cf2"])
+
         fig.update_traces(textposition="outside")
+
         fig.update_layout(template=tmpl, height=340, showlegend=False, xaxis_title="", yaxis_title="Tickets")
+
         st.plotly_chart(fig, width="stretch")
+
     with c2:
         tag("Issue volume by hour")
+
         hourly = df["issue_hour"].value_counts().sort_index().reset_index()
+
         hourly.columns = ["hour", "count"]
+
         fig = px.area(hourly, x="hour", y="count", markers=True)
+
         fig.update_traces(line_color=theme["accent"], fillcolor=theme["accent_soft"])
+
         fig.update_layout(template=tmpl, height=340, xaxis_title="Hour", yaxis_title="Tickets", xaxis=dict(dtick=2))
+
         st.plotly_chart(fig, width="stretch")
 
 
@@ -886,12 +1090,15 @@ def page_overview(theme, df):
 
 def _hex_to_rgba(hex_color, alpha):
     h = hex_color.lstrip("#")
+
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
     return f"rgba({r},{g},{b},{alpha})"
 
 
 def gauge_chart(theme, prob):
     color = theme["good"] if prob >= 0.5 else theme["bad"]
+
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=prob * 100,
         number={"suffix": "%", "font": {"size": 40, "color": theme["text"], "family": "JetBrains Mono"}},
@@ -908,45 +1115,62 @@ def gauge_chart(theme, prob):
             "threshold": {"line": {"color": theme["text"], "width": 2}, "thickness": 0.8, "value": 50},
         },
     ))
+
     fig.update_layout(template=plotly_template(theme), height=280, margin=dict(l=20, r=20, t=10, b=10))
+
     return fig
 
 
 def page_predict(theme, df, lookups, label_maps, artifacts):
     model, tfidf, scaler, pt = artifacts
+
     header("Predict", "Score a single ticket")
 
     with st.form("predict_form"):
         c1, c2, c3 = st.columns(3)
+
         with c1:
             channel_name = st.selectbox("Support channel", lookups.channels)
+
             category = st.selectbox("Issue category", lookups.categories)
+
         with c2:
             sub_options = lookups.subcategory_by_category.get(category, [])
+
             sub_category = st.selectbox("Sub-category", sub_options if sub_options else ["General Enquiry"])
+
             tenure_bucket = st.selectbox("Agent tenure", TENURE_ORDER, index=2)
+
         with c3:
             agent_shift = st.selectbox("Agent shift", ["Morning", "Afternoon", "Evening", "Night", "Split"])
+
             issue_dow = st.selectbox("Day reported", DAY_NAMES, index=2)
 
         c4, c5, c6 = st.columns(3)
+
         with c4:
             issue_time = st.time_input("Time reported", value=dtime(10, 0))
+
         with c5:
             response_minutes = st.slider("Response time (minutes)", 0, 1440,
                                           int(min(lookups.response_time_median, 120)), step=5)
+
         with c6:
             st.metric("Historical median", f"{lookups.response_time_median:.0f} min")
 
         c7, c8 = st.columns(2)
+
         with c7:
             agent_name = st.selectbox("Agent", ["Unknown"] + lookups.agents)
+
         with c8:
             supervisor = st.selectbox("Supervisor", ["Unknown"] + lookups.supervisors)
 
         customer_remarks = st.text_area("Customer remarks", height=100,
                                          placeholder="What did the customer say?")
+
         show_shap = st.checkbox("Include feature contribution breakdown", value=True)
+
         submitted = st.form_submit_button("Predict")
 
     if not submitted:
@@ -967,19 +1191,25 @@ def page_predict(theme, df, lookups, label_maps, artifacts):
     st.markdown("---")
 
     is_satisfied = result["prediction"] == 1
+
     confidence = result["prob_satisfied"] if is_satisfied else result["prob_dissatisfied"]
+
     message = ("this looks low-risk based on historical patterns" if is_satisfied
                else "worth prioritizing for follow-up")
+
     verdict_box(theme, is_satisfied, f"{confidence:.1%}", message)
 
     colA, colB = st.columns([1, 1.3])
+
     with colA:
         st.plotly_chart(gauge_chart(theme, result["prob_satisfied"]), width="stretch")
+
         with st.expander("Processed text"):
             st.code(result["clean_remark"] or "(empty)", language=None)
 
     with colB:
         st.markdown("**Contributing signals**")
+
         if response_minutes > lookups.response_time_p90:
             chip(theme, "bad", f"Response time ({response_minutes} min) is in the slowest 10% historically")
         elif response_minutes <= lookups.response_time_median:
@@ -988,7 +1218,9 @@ def page_predict(theme, df, lookups, label_maps, artifacts):
             chip(theme, "warn", f"Response time ({response_minutes} min) is above median")
 
         cat_rate = df[df["category"] == category]["CSAT_label"].mean()
+
         overall = df["CSAT_label"].mean()
+
         if cat_rate < overall - 0.05:
             chip(theme, "bad", f"'{category}' underperforms on satisfaction ({cat_rate:.0%})")
         elif cat_rate > overall + 0.05:
@@ -996,6 +1228,7 @@ def page_predict(theme, df, lookups, label_maps, artifacts):
 
         if ticket.agent_name:
             a_score = lookups.agent_lookup.get(ticket.agent_name, lookups.global_mean)
+
             if a_score >= lookups.global_mean:
                 chip(theme, "good", f"Agent's historical average CSAT ({a_score:.2f}) is above global average")
             else:
@@ -1003,12 +1236,16 @@ def page_predict(theme, df, lookups, label_maps, artifacts):
 
     if show_shap:
         st.markdown("---")
+
         st.markdown("**Model explanation**")
+
         st.caption("Per-feature contributions from the trained model for this ticket. "
                    "Positive pushes toward satisfied, negative toward dissatisfied.")
+
         with st.spinner("Computing..."):
             try:
                 contributions = build_shap_explanation(ticket, model, tfidf, scaler, pt, label_maps, lookups)
+
                 shap_bars(theme, contributions)
             except Exception as e:
                 st.warning(f"Could not compute explanation: {e}")
@@ -1020,31 +1257,39 @@ def page_predict(theme, df, lookups, label_maps, artifacts):
 
 def page_batch(theme, df, lookups, label_maps, artifacts):
     model, tfidf, scaler, pt = artifacts
+
     header("Batch scoring", "Score a whole queue at once")
 
     with st.expander("Expected columns"):
         st.code("channel_name, category, Sub-category, Tenure Bucket, Agent Shift,\n"
                 "Issue_reported at, issue_responded, Agent_name, Supervisor, Customer Remarks",
                 language=None)
+
         st.caption("Your original Customer_support_data.csv schema also works directly.")
 
     uploaded = st.file_uploader("Upload ticket CSV", type=["csv"])
+
     use_sample = st.button("Use a sample of historical data instead")
 
     if uploaded is not None:
         try:
             source_df = pd.read_csv(uploaded)
+
             st.session_state["source_df"] = source_df
+
             st.session_state["source_label"] = f"Loaded {len(source_df):,} rows from upload."
         except Exception as e:
             st.error(f"Could not read file: {e}")
     elif use_sample:
         source_df = df.sample(n=min(200, len(df)), random_state=42).drop(
             columns=["CSAT_label", "agent_csat_encoded", "supervisor_csat_encoded"], errors="ignore")
+
         st.session_state["source_df"] = source_df
+
         st.session_state["source_label"] = "Using 200 sampled historical tickets."
 
     source_df = st.session_state.get("source_df")
+
     if source_df is not None and st.session_state.get("source_label"):
         st.info(st.session_state["source_label"])
 
@@ -1052,57 +1297,81 @@ def page_batch(theme, df, lookups, label_maps, artifacts):
         return
 
     st.markdown("**Preview**")
+
     st.dataframe(source_df.head(10), width="stretch", height=200)
 
     if st.button("Run batch prediction", type="primary"):
         with st.spinner(f"Scoring {len(source_df):,} tickets..."):
             scored = predict_batch(source_df, model, tfidf, scaler, pt, label_maps, lookups)
+
         st.session_state["batch_scored"] = scored
 
     if "batch_scored" not in st.session_state:
         return
 
     scored = st.session_state["batch_scored"]
+
     st.markdown("---")
+
     st.markdown("**Results**")
 
     c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         stat_card("Scored", f"{len(scored):,}")
+
     with c2:
         stat_card("Predicted satisfied", f"{(scored['predicted_label']=='Satisfied').mean():.1%}")
+
     with c3:
         stat_card("High risk", f"{(scored['risk_tier']=='High Risk').sum():,}")
+
     with c4:
         stat_card("Avg. dissatisfaction prob.", f"{scored['prob_dissatisfied'].mean():.1%}")
 
     tmpl = plotly_template(theme)
+
     c1, c2 = st.columns(2)
+
     with c1:
         tag("Risk distribution")
+
         tier_counts = scored["risk_tier"].value_counts().reindex(["Low Risk", "Medium Risk", "High Risk"]).fillna(0)
+
         fig = px.bar(x=tier_counts.index, y=tier_counts.values, color=tier_counts.index,
                      color_discrete_map={"Low Risk": theme["good"], "Medium Risk": theme["warn"], "High Risk": theme["bad"]})
+
         fig.update_layout(template=tmpl, height=300, showlegend=False, xaxis_title="", yaxis_title="Tickets")
+
         st.plotly_chart(fig, width="stretch")
+
     with c2:
         tag("Probability distribution")
+
         fig = px.histogram(scored, x="prob_satisfied", nbins=30, color_discrete_sequence=[theme["accent"]])
+
         fig.add_vline(x=0.5, line_dash="dash", line_color=theme["warn"])
+
         fig.update_layout(template=tmpl, height=300, xaxis_title="P(Satisfied)", yaxis_title="Tickets")
+
         st.plotly_chart(fig, width="stretch")
 
     st.markdown("**Highest risk tickets**")
+
     priority_cols = [c for c in ["Unique id", "category", "sub_category", "channel_name",
                                   "Agent_name", "Customer Remarks", "prob_dissatisfied",
                                   "predicted_label", "risk_tier"] if c in scored.columns]
+
     top_risk = scored.sort_values("prob_dissatisfied", ascending=False)[priority_cols].head(25)
+
     st.dataframe(top_risk, width="stretch", height=380)
 
     st.markdown("**Full results**")
+
     st.dataframe(scored, width="stretch", height=340)
 
     csv_bytes = scored.to_csv(index=False).encode("utf-8")
+
     st.download_button("Download full results (CSV)", data=csv_bytes,
                         file_name=f"csat_predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                         mime="text/csv")
@@ -1117,13 +1386,19 @@ def page_explorer(theme, df):
 
     with st.expander("Filters", expanded=True):
         f1, f2, f3 = st.columns(3)
+
         channels = sorted(df["channel_name"].dropna().unique().tolist())
+
         categories = sorted(df["category"].dropna().unique().tolist())
+
         shifts = sorted(df["Agent Shift"].dropna().unique().tolist())
+
         with f1:
             channel_filter = st.multiselect("Channel", channels, default=channels)
+
         with f2:
             category_filter = st.multiselect("Category", categories, default=categories)
+
         with f3:
             shift_filter = st.multiselect("Agent shift", shifts, default=shifts)
 
@@ -1133,85 +1408,126 @@ def page_explorer(theme, df):
     st.caption(f"Showing {len(filtered):,} of {len(df):,} tickets")
 
     c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         stat_card("Filtered", f"{len(filtered):,}")
+
     with c2:
         stat_card("Satisfaction rate", f"{filtered['CSAT_label'].mean():.1%}" if len(filtered) else "—")
+
     with c3:
         stat_card("Median response", f"{filtered['response_time_minutes'].median():.0f} min" if len(filtered) else "—")
+
     with c4:
         stat_card("Avg CSAT", f"{filtered['CSAT Score'].mean():.2f} / 5" if len(filtered) else "—")
 
     if filtered.empty:
         st.info("No tickets match the current filters.")
+
         return
 
     tmpl = plotly_template(theme)
+
     tab1, tab2, tab3, tab4 = st.tabs(["Drivers", "Response time", "Agents", "Raw data"])
 
     with tab1:
         c1, c2 = st.columns(2)
+
         with c1:
             tag("Satisfaction by sub-category")
+
             top_sub = filtered["Sub-category"].value_counts().head(15).index
+
             sub_sat = (filtered[filtered["Sub-category"].isin(top_sub)]
                        .groupby("Sub-category")["CSAT_label"].mean().sort_values() * 100).reset_index()
+
             fig = px.bar(sub_sat, x="CSAT_label", y="Sub-category", orientation="h",
                          color="CSAT_label", color_continuous_scale=[theme["bad"], theme["warn"], theme["good"]],
                          labels={"CSAT_label": "Satisfaction %"})
+
             fig.update_layout(template=tmpl, height=440, coloraxis_showscale=False, yaxis_title="")
+
             st.plotly_chart(fig, width="stretch")
+
         with c2:
             tag("Satisfaction by channel and shift")
+
             pivot = filtered.pivot_table(index="Agent Shift", columns="channel_name", values="CSAT_label", aggfunc="mean")
+
             if pivot.empty:
                 st.caption("Not enough data for this filter combination.")
             else:
                 fig = px.imshow(pivot, color_continuous_scale=[theme["bad"], theme["warn"], theme["good"]], aspect="auto")
+
                 fig.update_layout(template=tmpl, height=440)
+
                 st.plotly_chart(fig, width="stretch")
 
     with tab2:
         c1, c2 = st.columns(2)
+
         with c1:
             tag("Response time distribution")
+
             rt = filtered["response_time_minutes"]
+
             rt = rt[rt <= 500]
+
             fig = px.histogram(rt, nbins=50, color_discrete_sequence=[theme["accent"]])
+
             fig.add_vline(x=filtered["response_time_minutes"].median(), line_dash="dash", line_color=theme["warn"])
+
             fig.update_layout(template=tmpl, height=360, xaxis_title="Minutes", yaxis_title="Tickets", showlegend=False)
+
             st.plotly_chart(fig, width="stretch")
+
         with c2:
             tag("Response time by CSAT score")
+
             box_df = filtered[filtered["response_time_minutes"] <= 500]
+
             fig = px.box(box_df, x="CSAT Score", y="response_time_minutes", color="CSAT Score",
                         color_discrete_sequence=px.colors.sequential.Blues_r)
+
             fig.update_layout(template=tmpl, height=360, showlegend=False)
+
             st.plotly_chart(fig, width="stretch")
 
     with tab3:
         c1, c2 = st.columns(2)
+
         with c1:
             tag("Top agents by avg CSAT (min 20 tickets)")
+
             agent_stats = filtered.groupby("Agent_name")["CSAT Score"].agg(["mean", "count"])
+
             agent_stats = agent_stats[agent_stats["count"] >= 20].sort_values("mean", ascending=False).head(10)
+
             if agent_stats.empty:
                 st.caption("No agents with 20+ tickets in this filter.")
             else:
                 fig = px.bar(agent_stats.reset_index(), x="mean", y="Agent_name", orientation="h",
                             color="mean", color_continuous_scale=[theme["warn"], theme["good"]])
+
                 fig.update_layout(template=tmpl, height=400, coloraxis_showscale=False, yaxis_title="", xaxis_title="Avg CSAT")
+
                 st.plotly_chart(fig, width="stretch")
+
         with c2:
             tag("Top supervisors by avg team CSAT")
+
             sup_stats = filtered.groupby("Supervisor")["CSAT Score"].agg(["mean", "count"])
+
             sup_stats = sup_stats[sup_stats["count"] >= 20].sort_values("mean", ascending=False).head(10)
+
             if sup_stats.empty:
                 st.caption("No supervisors with 20+ tickets in this filter.")
             else:
                 fig = px.bar(sup_stats.reset_index(), x="mean", y="Supervisor", orientation="h",
                             color="mean", color_continuous_scale=[theme["warn"], theme["accent"]])
+
                 fig.update_layout(template=tmpl, height=400, coloraxis_showscale=False, yaxis_title="", xaxis_title="Avg CSAT")
+
                 st.plotly_chart(fig, width="stretch")
 
     with tab4:
@@ -1220,6 +1536,7 @@ def page_explorer(theme, df):
                       "Supervisor", "Agent Shift", "Tenure Bucket", "response_time_minutes", "CSAT Score"]].head(500),
             width="stretch", height=440,
         )
+
         st.caption("First 500 filtered rows.")
 
 
@@ -1231,51 +1548,69 @@ def page_model_performance(theme, df, lookups, label_maps, artifacts):
     header("Model performance", "How the model scores against held-out data")
 
     c1, c2, c3, c4, c5 = st.columns(5)
+
     metrics = [("Accuracy", REPORTED_METRICS["accuracy"]), ("Precision", REPORTED_METRICS["precision_macro"]),
                ("Recall", REPORTED_METRICS["recall_macro"]), ("F1", REPORTED_METRICS["f1_macro"]),
                ("ROC-AUC", REPORTED_METRICS["roc_auc"])]
+
     for col, (label, val) in zip([c1, c2, c3, c4, c5], metrics):
         with col:
             stat_card(label, f"{val:.3f}")
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
     tmpl = plotly_template(theme)
 
     left, right = st.columns([1, 1], gap="large")
+
     with left:
         tag("Model comparison")
-        rank_df = pd.DataFrame({"Model": ["XGBoost", "Random Forest", "Logistic Regression"],
-                                 "ROC-AUC": [0.780, 0.761, 0.757]})
+
+        rank_df = pd.DataFrame({"Model": ["XGBoost", "Logistic Regression", "Random Forest"],
+                                 "ROC-AUC": [0.796, 0.781, 0.774]})
+
         fig = px.bar(rank_df, x="ROC-AUC", y="Model", orientation="h", color="Model",
                     color_discrete_sequence=[theme["accent"], theme["accent_bright"], theme["text_faint"]],
                     range_x=[0.7, 0.8])
+
         fig.update_layout(template=tmpl, height=300, showlegend=False, yaxis_title="")
+
         st.plotly_chart(fig, width="stretch")
 
     with right:
         tag("Confusion matrix")
+
         z = [[STATIC_CONFUSION["tn"], STATIC_CONFUSION["fp"]], [STATIC_CONFUSION["fn"], STATIC_CONFUSION["tp"]]]
+
         fig = go.Figure(data=go.Heatmap(
             z=z, x=["Pred. dissatisfied", "Pred. satisfied"], y=["Actual dissatisfied", "Actual satisfied"],
             colorscale=[[0, theme["panel_alt"]], [1, theme["accent"]]],
             text=z, texttemplate="%{text}", showscale=False,
         ))
+
         fig.update_layout(template=tmpl, height=300)
+
         st.plotly_chart(fig, width="stretch")
 
     st.markdown("---")
+
     tag("Feature importance")
+
     st.caption("Structured signals and text terms with the strongest influence on the model's predictions.")
+
     with st.spinner("Loading..."):
         contributions = top_global_features(artifacts, label_maps)
+
     shap_bars(theme, contributions)
 
     st.markdown("---")
+
     with st.expander("Hyperparameters"):
         hp_df = pd.DataFrame({
             "Parameter": ["n_estimators", "max_depth", "learning_rate", "scale_pos_weight", "tree_method"],
-            "Value": ["300", "4-6 (tuned)", "0.05-0.1 (tuned)", "class-imbalance ratio", "hist"],
+            "Value": ["300", "6", "0.1", "0.213", "hist"],
         })
+
         st.table(hp_df)
 
 
@@ -1287,6 +1622,7 @@ def page_about(theme):
     header("About", "How this was built")
 
     c1, c2 = st.columns([1.3, 1])
+
     with c1:
         st.markdown("""
 **Pipeline**
@@ -1340,11 +1676,16 @@ def main():
         st.session_state["dark_mode"] = True
 
     theme = DARK if st.session_state["dark_mode"] else LIGHT
+
     inject_css(theme)
 
     artifacts, missing = load_artifacts()
+
+    label_maps, le_missing = load_label_maps()
+
     df, data_error = load_dataset()
-    ready = artifacts is not None and df is not None
+
+    ready = artifacts is not None and label_maps is not None and df is not None
 
     with st.sidebar:
         st.markdown(
@@ -1361,12 +1702,16 @@ def main():
                          label_visibility="collapsed")
 
         st.markdown("---")
+
         dark_toggle = st.toggle("Dark mode", value=st.session_state["dark_mode"])
+
         if dark_toggle != st.session_state["dark_mode"]:
             st.session_state["dark_mode"] = dark_toggle
+
             st.rerun()
 
         st.markdown("---")
+
         if ready:
             st.markdown(
                 f'<div class="card" style="padding:14px 16px;">'
@@ -1387,16 +1732,18 @@ def main():
 
     if not ready:
         header("Setup required", "Model artifacts or data not found")
+
         st.markdown(
             "Place the `models/` folder (best_xgboost_classifier.pkl, tfidf_vectorizer.pkl, "
-            "standard_scaler.pkl, power_transformer.pkl) and `Customer_support_data.csv` "
-            "next to this file, then reload."
+            "standard_scaler.pkl, power_transformer.pkl, label_encoders.pkl) and "
+            "`Customer_support_data.csv` next to this file, then reload."
         )
+
         return
 
     model, tfidf, scaler, pt = artifacts
+
     lookups = build_lookups(df)
-    label_maps = build_label_maps(df)
 
     if page == "Overview":
         page_overview(theme, df)

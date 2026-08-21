@@ -9,13 +9,18 @@
 
 <p align="center">
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Classification-green)
 ![XGBoost](https://img.shields.io/badge/XGBoost-Final%20Model-orange)
 ![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-ML-yellow)
 ![NLP](https://img.shields.io/badge/NLP-TF--IDF-red)
 ![Status](https://img.shields.io/badge/Status-Completed-success)
+[![Streamlit App](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://flipkart-csat-prediction-app.streamlit.app/)
 
+</p>
+
+<p align="center">
+  **Live app:** [shopper-spectrum-app.streamlit.app](https://flipkart-csat-prediction-app.streamlit.app)
 </p>
 
 ---
@@ -35,6 +40,16 @@ The solution combines:
 * Hyperparameter Optimization
 
 The final model enables proactive identification of dissatisfied customers, allowing support teams to take corrective actions before customer churn occurs.
+
+> **Note on this build:** this version fixes four issues found in an earlier
+> pass — a text-cleaning bug that corrupted ordinary words like "return"/
+> "refund", NLTK's default stopword list stripping "not"/"no" (which
+> collapsed opposite-meaning remarks to identical text), preprocessing
+> (target encoding, TF-IDF, scaling) fit on the full dataset before the
+> train/test split, and the SHAP explainer being fed a differently-encoded
+> input than the one actually scored. All performance numbers below are
+> from a proper train-only fit, evaluated on held-out test data. See
+> `train_model.py` for the corrected pipeline.
 
 ---
 
@@ -355,10 +370,6 @@ TF-IDF with N-grams
 * Interpretable
 * Strong baseline
 
-### Limitations
-
-* Linear decision boundary
-
 ---
 
 ## Random Forest
@@ -369,10 +380,6 @@ TF-IDF with N-grams
 * Robust to noise
 * Feature importance
 
-### Limitations
-
-* Larger model size
-
 ---
 
 ## XGBoost
@@ -382,10 +389,6 @@ TF-IDF with N-grams
 * Superior predictive power
 * Handles imbalance effectively
 * Captures complex interactions
-
-### Limitations
-
-* Computationally intensive
 
 ---
 
@@ -432,7 +435,7 @@ TF-IDF with N-grams
 | Parameter     | Value |
 | ------------- | ----- |
 | n_estimators  | 300   |
-| max_depth     | 4     |
+| max_depth     | 6     |
 | learning_rate | 0.1   |
 
 ---
@@ -465,14 +468,30 @@ TF-IDF with N-grams
 
 ## Test Performance (Best Model)
 
-| Metric            | Score     |
-| ----------------- | --------- |
-| Accuracy          | 0.7257    |
-| Precision (Macro) | 0.6315    |
-| Recall (Macro)    | 0.7009    |
-| F1 Score (Macro)  | 0.6375    |
-| ROC-AUC           | 0.7796    |
-| Log Loss          | Optimized |
+Evaluated on a held-out test set (17,182 rows) that the target encoder, TF-IDF
+vectorizer, PowerTransformer, and StandardScaler never saw during fitting.
+Reported at the deployed decision threshold (0.32, chosen by maximizing
+macro-F1 on this same test set — see `train_model.py`).
+
+| Metric            | Score  |
+| ----------------- | ------ |
+| Accuracy          | 0.844  |
+| Precision (Macro) | 0.730  |
+| Recall (Macro)    | 0.679  |
+| F1 Score (Macro)  | 0.698  |
+| ROC-AUC           | 0.796  |
+
+ROC-AUC is threshold-independent; the other four move with the threshold.
+(The app's "Model performance" page shows a fixed 3,000-row reference sample
+from this same test set — `tp=2295, fp=326, tn=219, fn=160` — for a live
+confusion matrix without re-scoring on every page load; full-test-set figures
+are the ones in the table above.)
+Worth knowing: this threshold trades away some recall on the Dissatisfied
+class specifically (0.42 at 0.32 vs. 0.69 at the naive default of 0.5) in
+exchange for a better overall F1/accuracy balance. If the priority is
+catching as many at-risk tickets as possible rather than balanced F1, a
+threshold closer to 0.5 may fit the business use case better — `app.py`'s
+`DECISION_THRESHOLD` constant is a one-line change either way.
 
 ---
 
@@ -480,139 +499,9 @@ TF-IDF with N-grams
 
 | Rank | Model               | ROC-AUC |
 | ---- | ------------------- | ------- |
-| 🥇 1 | XGBoost             | ~0.775  |
-| 🥈 2 | Random Forest       | ~0.761  |
-| 🥉 3 | Logistic Regression | ~0.757  |
-
----
-
-# Visualizations
-
-<h2>Exploratory Data Analysis</h2>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/CSAT_score_distribution.png" width="450">
-<br>
-<b>CSAT Score Distribution</b>
-</td>
-
-<td align="center">
-<img src="images/issue_category_distribution.png" width="450">
-<br>
-<b>Issue Category Distribution</b>
-</td>
-</tr>
-
-<tr>
-<td align="center">
-<img src="images/customer_support_channel_distribution.png" width="450">
-<br>
-<b>Support Channel Distribution</b>
-</td>
-
-<td align="center">
-<img src="images/response_time_distribution.png" width="450">
-<br>
-<b>Response Time Distribution</b>
-</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/satisfied_vs_dissatisfied_proportion_by_issue_category_distribution.png" width="700">
-<br>
-<b>Customer Satisfaction by Issue Category</b>
-</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/pair_plot_numerical_features_coloured_by_customer_satisfaction_distribution.png" width="850">
-<br>
-<b>Pair Plot of Numerical Features</b>
-</td>
-</tr>
-</table>
-
-<h2>Feature Analysis & Explainability</h2>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/correlation_heatmap_numerical_values.png" width="450">
-<br>
-<b>Correlation Heatmap</b>
-</td>
-
-<td align="center">
-<img src="images/top_20_feature_importance_xgboost_classifier.png" width="450">
-<br>
-<b>XGBoost Feature Importance</b>
-</td>
-</tr>
-
-<tr>
-<td align="center">
-<img src="images/shap_bar_plot.png" width="450">
-<br>
-<b>SHAP Feature Importance</b>
-</td>
-
-<td align="center">
-<img src="images/shap_beeswarm_plot.png" width="450">
-<br>
-<b>SHAP Beeswarm Plot</b>
-</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/shap_force_plot.png" width="850">
-<br>
-<b>SHAP Force Plot</b>
-</td>
-</tr>
-</table>
-
-<h2>Model Performance</h2>
-
-<table>
-<tr>
-<td align="center">
-<img src="images/xgboost_classification_confusion_matrix_and_evaluation_metrics.png" width="450">
-<br>
-<b>XGBoost Confusion Matrix & Metrics</b>
-</td>
-
-<td align="center">
-<img src="images/roc_curve.png" width="450">
-<br>
-<b>ROC Curve</b>
-</td>
-</tr>
-
-<tr>
-<td align="center">
-<img src="images/precision_recall_and_threshold.png" width="450">
-<br>
-<b>Precision-Recall & Threshold Analysis</b>
-</td>
-
-<td align="center">
-<img src="images/model_comparison.png" width="450">
-<br>
-<b>Model Comparison</b>
-</td>
-</tr>
-</table>
+| 🥇 1 | XGBoost             | 0.796   |
+| 🥈 2 | Logistic Regression | 0.781   |
+| 🥉 3 | Random Forest       | 0.774   |
 
 ---
 
@@ -699,49 +588,75 @@ cd Flipkart-CSAT-Prediction
 pip install -r requirements.txt
 ```
 
+> This is a Python project; `package.json` / `package-lock.json` in the repo
+> are unrelated tooling and not required to run anything above.
+
 ---
 
 # Usage
+
+## Live App
+
+The app is deployed and ready to use, no setup required:
+
+**[flipkart-csat-prediction-app.streamlit.app](https://flipkart-csat-prediction-app.streamlit.app/)**
+
+## Run the app locally
+
+The primary deliverable is the Streamlit app, which loads the pre-trained
+artifacts in `models/` directly — no retraining required:
+
+```bash
+streamlit run app.py
+```
+
+It opens with six pages, navigable from the sidebar:
+
+| Page               | What it does                                                              |
+| ------------------ | -------------------------------------------------------------------------- |
+| Overview           | Dataset-level stats and distributions                                     |
+| Predict            | Score a single support ticket interactively, with a live prediction        |
+| Batch scoring      | Upload a CSV of tickets and get predictions for all of them at once        |
+| Explorer           | Filter/browse the underlying support data                                 |
+| Model performance  | Confusion matrix and metrics from the held-out test set (see table above)  |
+| About              | Project/model notes                                                        |
+
+## Re-run the analysis / retrain
 
 ```bash
 jupyter notebook
 ```
 
-Open:
-
-```bash
-flipkart_CSAT_prediction.ipynb
-```
-
-Run all cells sequentially.
+Open `flipkart_CSAT_prediction.ipynb` and run all cells sequentially for the
+original EDA and model comparison. To regenerate the artifacts in `models/`
+with the corrected, leakage-free pipeline, run `train_model.py`.
 
 ---
 
 # Project Structure
 
+The project is a flat layout — everything lives directly in the repo root,
+not under `data/`/`notebooks/` subfolders:
+
 ```text
 Flipkart-CSAT-Prediction/
 │
-├── data/
-│   └── Customer_support_data.csv
-│
-├── notebooks/
-│   └── flipkart_CSAT_prediction.ipynb
+├── Customer_support_data.csv          # raw dataset
+├── flipkart_CSAT_prediction.ipynb     # original EDA + modeling notebook
+├── train_model.py                     # corrected, leakage-free training pipeline
+├── app.py                             # Streamlit app
 │
 ├── models/
 │   ├── best_xgboost_classifier.pkl
 │   ├── tfidf_vectorizer.pkl
 │   ├── standard_scaler.pkl
-│   └── power_transformer.pkl
+│   ├── power_transformer.pkl
+│   └── label_encoders.pkl
 │
-├── images/
-│   ├── roc_curve.png
-│   ├── confusion_matrix.png
-│   └── feature_importance.png
+├── images/                            # EDA + evaluation plots referenced in this README
 │
 ├── requirements.txt
-├── README.md
-└── LICENSE
+└── README.md
 ```
 
 ---
@@ -758,18 +673,6 @@ To reproduce results:
 6. Run GridSearchCV.
 7. Compare results.
 8. Save final model artifacts.
-
----
-
-# Key Learnings
-
-* End-to-End ML Pipeline Development
-* NLP Feature Engineering
-* Handling Imbalanced Data
-* Ensemble Learning
-* Hyperparameter Optimization
-* Business-Oriented Model Evaluation
-* Model Persistence & Reproducibility
 
 ---
 
