@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  **Live app:** [shopper-spectrum-app.streamlit.app](https://flipkart-csat-prediction-app.streamlit.app)
+  <b><a href="https://flipkart-csat-prediction-app.streamlit.app/">🔗 Try the live app</a></b>
 </p>
 
 ---
