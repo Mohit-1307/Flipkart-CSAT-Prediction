@@ -1,13 +1,9 @@
-<p align="center">
+<div align="center">
+
   <img src="images/flipkart_logo.png" width="300" alt="Flipkart Logo">
-</p>
 
 
-<h1 align="center">
   Flipkart Customer Satisfaction Analysis
-</h1>
-
-<p align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Classification-green)
@@ -15,13 +11,10 @@
 ![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-ML-yellow)
 ![NLP](https://img.shields.io/badge/NLP-TF--IDF-red)
 ![Status](https://img.shields.io/badge/Status-Completed-success)
-[![Streamlit App](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://flipkart-csat-prediction-app.streamlit.app/)
 
-</p>
+  **[Live App →](https://flipkart-csat-prediction-app.streamlit.app)**
 
-<p align="center">
-  <b><a href="https://flipkart-csat-prediction-app.streamlit.app/">🔗 Live App</a></b>
-</pz>
+</div>
 
 ---
 
@@ -52,25 +45,25 @@ The final model enables proactive identification of dissatisfied customers, allo
 
 # Key Highlights
 
-✅ 85,907 customer support interaction records
+- 85,907 customer support interaction records
 
-✅ Binary CSAT Prediction
+- Binary CSAT Prediction
 
-✅ End-to-End Data Science Pipeline
+- End-to-End Data Science Pipeline
 
-✅ NLP-based Text Processing
+- NLP-based Text Processing
 
-✅ TF-IDF Feature Engineering
+- TF-IDF Feature Engineering
 
-✅ Class Imbalance Handling
+- Class Imbalance Handling
 
-✅ Hyperparameter Optimization
+- Hyperparameter Optimization
 
-✅ Model Comparison Framework
+- Model Comparison Framework
 
-✅ Production-Ready Model Persistence
+- Production-Ready Model Persistence
 
-✅ Business-Oriented Evaluation Metrics
+- Business-Oriented Evaluation Metrics
 
 ---
 
