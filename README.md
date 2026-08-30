@@ -5,7 +5,6 @@
 
   <h1 align="center">
   Flipkart Customer Satisfaction Analysis
-</h1>
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Classification-green)
