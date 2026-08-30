@@ -3,9 +3,9 @@
   <img src="images/flipkart_logo.png" width="300" alt="Flipkart Logo">
 
 
-  <div align="center">
+  <h1 align="center">
   Flipkart Customer Satisfaction Analysis
-</div>
+</h1>
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Machine Learning](https://img.shields.io/badge/Machine%20Learning-Classification-green)
