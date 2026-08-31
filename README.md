@@ -89,7 +89,7 @@ Flipkart-CSAT-Prediction/
 │   ├── power_transformer.pkl          # PowerTransformer fit on numerical features
 │   └── label_encoders.pkl             # Label encoders for categorical features
 ├── .gitignore
-├── customer_support_data.csv          # Dataset
+├── customer_support.csv               # Dataset
 ├── README.md
 ├── app.py                             # Streamlit application (prediction + analytics UI)
 ├── flipkart_CSAT_prediction.ipynb     # Full analysis: EDA, feature engineering, modeling, evaluation
