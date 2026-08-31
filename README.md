@@ -17,7 +17,7 @@ An end-to-end supervised learning project that predicts whether a customer will 
 This project analyzes 85,907 customer support interaction records to:
 
 1. **Predict customer satisfaction** (Satisfied / Dissatisfied) from support ticket data — response times, issue category, agent details, and customer remarks.
-2. **Identify at-risk tickets** before escalation, using a decision threshold tuned for the class imbalance in the data.
+2. **Flag at-risk tickets** using a decision threshold (0.33) tuned to maximise macro-F1 across both classes — prioritising overall balanced performance rather than raw catch-rate of dissatisfied customers.
 
 Both prediction and supporting analytics are served through a Streamlit app with six pages (Overview, Predict, Batch scoring, Explorer, Model performance, About).
 
@@ -65,7 +65,9 @@ Three classification algorithms were trained and tuned via `GridSearchCV` (cv=3,
 
 ### Deployed Decision Threshold
 
-The default 0.5 threshold isn't optimal for this imbalanced problem. The notebook sweeps thresholds on the test set and picks the one that maximizes macro-F1 — **0.33** — used by `app.py`'s `DECISION_THRESHOLD` constant at inference time.
+The default 0.5 threshold isn't optimal for this imbalanced problem. The notebook sweeps thresholds on the test set and selects the one that maximises macro-F1 — **0.33** — used by `app.py`'s `DECISION_THRESHOLD` constant at inference time.
+
+**Important trade-off:** A threshold of 0.33 means a ticket is labelled *Satisfied* if `P(satisfied) ≥ 0.33`, so the bar for the Satisfied label is lower and more tickets receive it. This maximises the overall macro-F1 balance but **reduces** Dissatisfied recall compared with the default 0.5 (0.45 vs 0.72). If the business priority is catching as many at-risk tickets as possible rather than balanced F1, a higher threshold is the better operating point.
 
 | Segment          | Precision | Recall | F1-score | Support |
 | ---------------- | --------- | ------ | -------- | ------- |
@@ -80,17 +82,19 @@ The default 0.5 threshold isn't optimal for this imbalanced problem. The noteboo
 
 ```
 Flipkart-CSAT-Prediction/
-├── app.py                             # Streamlit application (prediction + analytics UI)
-├── flipkart_CSAT_prediction.ipynb     # Full analysis: EDA, feature engineering, modeling, evaluation
-├── requirements.txt                   # Python dependencies
 ├── models/
 │   ├── best_xgboost_classifier.pkl    # Trained XGBoost model (tuned)
 │   ├── tfidf_vectorizer.pkl           # TF-IDF vectorizer fit on customer remarks
 │   ├── standard_scaler.pkl            # StandardScaler fit on numerical features
 │   ├── power_transformer.pkl          # PowerTransformer fit on numerical features
 │   └── label_encoders.pkl             # Label encoders for categorical features
-├── images/                            # Saved chart exports from the notebook
-└── README.md
+├── .gitignore
+├── README.md
+├── app.py                             # Streamlit application (prediction + analytics UI)
+├── flipkart_CSAT_prediction.ipynb     # Full analysis: EDA, feature engineering, modeling, evaluation
+├── package-lock.json
+├── package.json
+└── requirements.txt                   # Python dependencies
 ```
 
 ---

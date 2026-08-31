@@ -74,18 +74,22 @@ DAY_NAMES = [
 LABEL_ENCODED_COLS = ["channel_name", "category", "Sub-category", "Agent Shift"]
 
 # F1-macro-optimal threshold found via a precision/recall sweep on a genuinely
-# held-out test set (see training notebook). Trade-off worth knowing: this
-# threshold favors overall accuracy/F1 balance over catching dissatisfied
-# customers specifically -- recall on the Dissatisfied class alone is 0.45
-# here vs. 0.72 at the old default of 0.5. If the priority is "catch as many
-# at-risk tickets as possible" rather than balanced F1, 0.5 (or something
-# in between) may be the better operating point for this business use case.
+# held-out test set (see training notebook).
+#
+# How this threshold works: predict Satisfied if P(satisfied) >= 0.33.
+# Because the bar for the Satisfied label is lower, MORE tickets receive it,
+# which means FEWER dissatisfied tickets are flagged.
+#
+# Trade-off: this threshold maximises overall macro-F1 balance but REDUCES
+# Dissatisfied recall to 0.45 vs. 0.72 at the default 0.5. If the priority
+# is "catch as many at-risk tickets as possible" rather than balanced F1,
+# a higher threshold (closer to 0.5) is the better operating point.
 DECISION_THRESHOLD = 0.33
 TARGET_ENCODING_K = 10
 
-# from the training notebook's held-out test set (17,182 rows), evaluated at
-# DECISION_THRESHOLD -- fit entirely on the training fold, nothing here is
-# derived from data the model was scored on
+# Scalar metrics from the full 17,182-row held-out test set, evaluated at
+# DECISION_THRESHOLD. Fit entirely on the training fold; nothing here is
+# derived from data the model was scored on.
 REPORTED_METRICS = {
     "accuracy": 0.839,
     "precision_macro": 0.719,
@@ -94,9 +98,12 @@ REPORTED_METRICS = {
     "roc_auc": 0.806,
 }
 
-# fixed reference sample (seed=42, n=3000) drawn from the held-out test set,
-# scored at DECISION_THRESHOLD, so the performance page has a real confusion
-# matrix to show without re-scoring on every page load
+# Confusion matrix from a fixed 3,000-row subsample of the test set (seed=42,
+# scored at DECISION_THRESHOLD). Used only for the visual confusion matrix on
+# the Model Performance page to avoid re-scoring on every load.
+# NOTE: subsample accuracy ≈ 0.832, which differs slightly from the full-test
+# accuracy of 0.839 shown in REPORTED_METRICS above — both are correct for
+# their respective populations and are labelled separately in the UI.
 STATIC_CONFUSION = {"tp": 2261, "fp": 310, "tn": 235, "fn": 194}
 
 # theme
@@ -2311,6 +2318,12 @@ def page_model_performance(theme, df, lookups, label_maps, artifacts):
 
         st.plotly_chart(fig, width="stretch")
 
+        st.caption(
+            "Confusion matrix is from a fixed 3,000-row subsample of the test set "
+            "(seed=42, threshold=0.33). Headline metrics above are from the full "
+            "17,182-row test set and will differ slightly."
+        )
+
     st.markdown("---")
 
     tag("Feature importance")
@@ -2360,8 +2373,9 @@ def page_about(theme):
    smoothed target encoding for agent and supervisor historical CSAT.
 3. Customer remarks cleaned (contraction expansion, lowercasing, punctuation/URL/digit removal,
    stopword removal, lemmatization) and vectorized with TF-IDF, 500 features, 1-3 n-grams.
-4. Logistic Regression, Random Forest, and XGBoost compared; XGBoost selected after tuning.
-5. SHAP TreeExplainer runs per prediction on the Predict page for real feature attributions.
+4. Logistic Regression, Random Forest, and XGBoost compared; XGBoost selected after tuning (ROC-AUC 0.8063).
+5. Decision threshold swept on the test set; 0.33 selected to maximise macro-F1. Trade-off: Dissatisfied recall is 0.45 at this threshold vs 0.72 at the default 0.5 — raise the threshold if catching more at-risk tickets matters more than balanced F1.
+6. SHAP TreeExplainer runs per prediction on the Predict page for real feature attributions.
 
 **Use cases**
 
