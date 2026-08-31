@@ -29,17 +29,17 @@ All model training, tuning, and artifact saving happens inside `flipkart_CSAT_pr
 
 The raw dataset (85,907 rows, 20 columns) was cleaned and engineered as follows:
 
-| Step | Action |
-|---|---|
-| 1 | Handled missing values across support metadata fields |
-| 2 | Removed duplicate records |
-| 3 | Parsed `Issue Reported Time` into datetime; derived Response Time, Issue Hour, Day of Week |
-| 4 | Label-encoded Channel, Category, and Agent features |
-| 5 | Applied power transformation to numerical features to address skew |
-| 6 | Scaled numerical features with `StandardScaler` |
-| 7 | Cleaned `Customer Remarks` text (lowercased, punctuation removed, stopwords removed, lemmatized) |
-| 8 | Vectorized cleaned text with TF-IDF (n-grams) |
-| 9 | Derived binary target `CSAT_label`: CSAT score ≤ 3 → Dissatisfied (0), ≥ 4 → Satisfied (1) |
+| Step | Action                                                                                           |
+| ---- | ------------------------------------------------------------------------------------------------ |
+| 1    | Handled missing values across support metadata fields                                            |
+| 2    | Removed duplicate records                                                                        |
+| 3    | Parsed `Issue Reported Time` into datetime; derived Response Time, Issue Hour, Day of Week       |
+| 4    | Label-encoded Channel, Category, and Agent features                                              |
+| 5    | Applied power transformation to numerical features to address skew                               |
+| 6    | Scaled numerical features with `StandardScaler`                                                  |
+| 7    | Cleaned `Customer Remarks` text (lowercased, punctuation removed, stopwords removed, lemmatized) |
+| 8    | Vectorized cleaned text with TF-IDF (n-grams)                                                    |
+| 9    | Derived binary target `CSAT_label`: CSAT score ≤ 3 → Dissatisfied (0), ≥ 4 → Satisfied (1)       |
 
 **Result: 70,836 Satisfied vs. 15,071 Dissatisfied records (~1:4.7 class imbalance).**
 
@@ -55,24 +55,24 @@ Response time, issue hour, day of week, and encoded categorical features were co
 
 Three classification algorithms were trained and tuned via `GridSearchCV` (cv=3, scoring=`roc_auc`), then evaluated on the same held-out 17,182-row test set:
 
-| Model | CV ROC-AUC (5-fold) | Accuracy | Precision (Macro) | Recall (Macro) | F1 (Macro) | ROC-AUC ↑ |
-|---|---|---|---|---|---|---|
-| **XGBoost (Tuned)** | 0.7966 ± 0.0046 | 0.7342 | 0.6445 | 0.7236 | 0.6520 | **0.8064** |
-| Logistic Regression | 0.7906 ± 0.0044 | 0.7302 | 0.6373 | 0.7110 | 0.6444 | 0.7947 |
-| Random Forest | 0.7706 ± 0.0031 | 0.7384 | 0.6382 | 0.7069 | 0.6477 | 0.7862 |
+| Model               | CV ROC-AUC (5-fold) | Accuracy | Precision (Macro) | Recall (Macro) | F1 (Macro) | ROC-AUC ↑  |
+| ------------------- | ------------------- | -------- | ----------------- | -------------- | ---------- | ---------- |
+| **XGBoost (Tuned)** | 0.7971 ± 0.0047     | 0.7334   | 0.6454            | 0.7263         | 0.6525     | **0.8063** |
+| Logistic Regression | 0.7911 ± 0.0043     | 0.7309   | 0.6377            | 0.7112         | 0.6450     | 0.7941     |
+| Random Forest       | 0.7667 ± 0.0038     | 0.7497   | 0.6419            | 0.7055         | 0.6539     | 0.7858     |
 
 **XGBoost (`n_estimators=300, max_depth=6, learning_rate=0.1`) was selected as the final model** — it produced the highest cross-validated and test ROC-AUC among the three candidates, and handled the class imbalance and feature interactions better than the linear and bagging alternatives.
 
 ### Deployed Decision Threshold
 
-The default 0.5 threshold isn't optimal for this imbalanced problem. The notebook sweeps thresholds on the test set and picks the one that maximizes macro-F1 — **0.34** — used by `app.py`'s `DECISION_THRESHOLD` constant at inference time (this value should be re-checked against your own notebook run, since it depends on the exact train/test split).
+The default 0.5 threshold isn't optimal for this imbalanced problem. The notebook sweeps thresholds on the test set and picks the one that maximizes macro-F1 — **0.33** — used by `app.py`'s `DECISION_THRESHOLD` constant at inference time.
 
-| Segment | Precision | Recall | F1-score | Support |
-|---|---|---|---|---|
-| Dissatisfied (0) | 0.53 | 0.47 | 0.50 | 3,014 |
-| Satisfied (1) | 0.89 | 0.91 | 0.90 | 14,168 |
+| Segment          | Precision | Recall | F1-score | Support |
+| ---------------- | --------- | ------ | -------- | ------- |
+| Dissatisfied (0) | 0.55      | 0.45   | 0.50     | 3,014   |
+| Satisfied (1)    | 0.89      | 0.92   | 0.90     | 14,168  |
 
-**Overall at threshold 0.34: Accuracy 0.834, Precision (Macro) 0.711, Recall (Macro) 0.689, F1 (Macro) 0.699, ROC-AUC 0.806** (ROC-AUC is threshold-independent, so it matches the comparison table above).
+**Overall at threshold 0.33: Accuracy 0.839, Precision (Macro) 0.719, Recall (Macro) 0.688, F1 (Macro) 0.701, ROC-AUC 0.806** (ROC-AUC is threshold-independent, so it matches the comparison table above).
 
 ---
 
@@ -82,7 +82,6 @@ The default 0.5 threshold isn't optimal for this imbalanced problem. The noteboo
 Flipkart-CSAT-Prediction/
 ├── app.py                             # Streamlit application (prediction + analytics UI)
 ├── flipkart_CSAT_prediction.ipynb     # Full analysis: EDA, feature engineering, modeling, evaluation
-├── Customer_support_data.csv          # Raw dataset
 ├── requirements.txt                   # Python dependencies
 ├── models/
 │   ├── best_xgboost_classifier.pkl    # Trained XGBoost model (tuned)
@@ -131,23 +130,8 @@ The app expects the trained artifacts (`best_xgboost_classifier.pkl`, `tfidf_vec
 
 ---
 
-# Acknowledgements
-
-* Flipkart Customer Support Dataset
-* Scikit-Learn
-* XGBoost
-* NLTK
-* Streamlit
-* Pandas
-* NumPy
-* Matplotlib
-* Open Source Community
-
----
-
 <div align="center">
 
-*If this project was useful, a ⭐ on the repository is appreciated.*
+_If this project was useful, a ⭐ on the repository is appreciated._
 
 </div>
-

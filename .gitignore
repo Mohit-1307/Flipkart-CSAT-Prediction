@@ -30,3 +30,6 @@ tmp/
 
 # node modules
 node_modules/
+
+# CSV files
+Customer_support_data.csv
