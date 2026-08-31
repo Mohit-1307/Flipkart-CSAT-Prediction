@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
-DATA_PATH = os.path.join(BASE_DIR, "Customer_support_data.csv")
+DATA_PATH = os.path.join(BASE_DIR, "customer_support_data.csv")
 
 MODEL_PATH = os.path.join(MODELS_DIR, "best_xgboost_classifier.pkl")
 TFIDF_PATH = os.path.join(MODELS_DIR, "tfidf_vectorizer.pkl")

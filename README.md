@@ -82,7 +82,6 @@ The default 0.5 threshold isn't optimal for this imbalanced problem. The noteboo
 
 ```
 Flipkart-CSAT-Prediction/
-├── images/
 ├── models/
 │   ├── best_xgboost_classifier.pkl    # Trained XGBoost model (tuned)
 │   ├── tfidf_vectorizer.pkl           # TF-IDF vectorizer fit on customer remarks
