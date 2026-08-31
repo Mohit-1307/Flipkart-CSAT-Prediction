@@ -931,12 +931,12 @@ def load_dataset():
     return df, None
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def build_lookups(_df):
     df = _df
 
     return Lookups(
-        global_mean=df.attrs["global_mean"],
+        global_mean=float(df.attrs["global_mean"]),
         agent_lookup=df.attrs["agent_lookup"],
         sup_lookup=df.attrs["sup_lookup"],
         agents=sorted(df["Agent_name"].dropna().unique().tolist()),
