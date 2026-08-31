@@ -82,6 +82,7 @@ The default 0.5 threshold isn't optimal for this imbalanced problem. The noteboo
 
 ```
 Flipkart-CSAT-Prediction/
+├── images/
 ├── models/
 │   ├── best_xgboost_classifier.pkl    # Trained XGBoost model (tuned)
 │   ├── tfidf_vectorizer.pkl           # TF-IDF vectorizer fit on customer remarks
@@ -89,6 +90,7 @@ Flipkart-CSAT-Prediction/
 │   ├── power_transformer.pkl          # PowerTransformer fit on numerical features
 │   └── label_encoders.pkl             # Label encoders for categorical features
 ├── .gitignore
+├── customer_support_data.csv          # Dataset
 ├── README.md
 ├── app.py                             # Streamlit application (prediction + analytics UI)
 ├── flipkart_CSAT_prediction.ipynb     # Full analysis: EDA, feature engineering, modeling, evaluation
