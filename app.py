@@ -44,6 +44,7 @@ SCALER_PATH = os.path.join(MODELS_DIR, "standard_scaler.pkl")
 PT_PATH = os.path.join(MODELS_DIR, "power_transformer.pkl")
 LE_PATH = os.path.join(MODELS_DIR, "label_encoders.pkl")
 
+
 ENC_FEATURE_COLS = [
     "channel_name_enc",
     "category_enc",
@@ -965,24 +966,39 @@ def load_label_maps():
     return joblib.load(LE_PATH), []
 
 
-@st.cache_resource(show_spinner="Loading model artifacts...")
+@st.cache_resource
 def load_artifacts():
-    required = [MODEL_PATH, TFIDF_PATH, SCALER_PATH, PT_PATH]
+    files = {
+        "model": MODEL_PATH,
+        "tfidf": TFIDF_PATH,
+        "scaler": SCALER_PATH,
+        "power_transformer": PT_PATH,
+        "label_encoders": LE_PATH,
+    }
 
-    missing = [p for p in required if not os.path.exists(p)]
+    missing = [path for path in files.values() if not os.path.isfile(path)]
 
     if missing:
-        return None, missing
+        st.error("Missing model files:")
+        for path in missing:
+            st.write(path)
+        st.stop()
 
-    model = joblib.load(MODEL_PATH)
+    try:
+        return (
+            joblib.load(MODEL_PATH),
+            joblib.load(TFIDF_PATH),
+            joblib.load(SCALER_PATH),
+            joblib.load(PT_PATH),
+            joblib.load(LE_PATH),
+        )
 
-    tfidf = joblib.load(TFIDF_PATH)
+    except Exception as e:
+        st.error(f"Error loading model artifacts: {e}")
+        st.stop()
 
-    scaler = joblib.load(SCALER_PATH)
 
-    pt = joblib.load(PT_PATH)
-
-    return (model, tfidf, scaler, pt), []
+model, tfidf, scaler, power_transformer, label_encoders = load_artifacts()
 
 
 # feature engineering + inference
