@@ -8,7 +8,7 @@ Expects, next to this file:
     models/standard_scaler.pkl
     models/power_transformer.pkl
     models/label_encoders.pkl
-    Customer_support_data.csv
+    Customer_support.csv
 
 Loads the model, TF-IDF vectorizer, scaler, power transformer, and label
 encoders that were fit and saved from the training notebook -- no separate
@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
-DATA_PATH = os.path.join(BASE_DIR, "customer_support_data.csv")
+DATA_PATH = os.path.join(BASE_DIR, "customer_support.csv")
 
 MODEL_PATH = os.path.join(MODELS_DIR, "best_xgboost_classifier.pkl")
 TFIDF_PATH = os.path.join(MODELS_DIR, "tfidf_vectorizer.pkl")
@@ -1800,9 +1800,7 @@ def page_batch(theme, df, lookups, label_maps, artifacts):
             language=None,
         )
 
-        st.caption(
-            "Your original Customer_support_data.csv schema also works directly."
-        )
+        st.caption("Your original Customer_support.csv schema also works directly.")
 
     uploaded = st.file_uploader("Upload ticket CSV", type=["csv"])
 
@@ -2515,7 +2513,7 @@ def main():
         st.markdown(
             "Place the `models/` folder (best_xgboost_classifier.pkl, tfidf_vectorizer.pkl, "
             "standard_scaler.pkl, power_transformer.pkl, label_encoders.pkl) and "
-            "`Customer_support_data.csv` next to this file, then reload."
+            "`Customer_support.csv` next to this file, then reload."
         )
 
         return
