@@ -965,39 +965,24 @@ def load_label_maps():
     return joblib.load(LE_PATH), []
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading model artifacts...")
 def load_artifacts():
-    files = {
-        "model": MODEL_PATH,
-        "tfidf": TFIDF_PATH,
-        "scaler": SCALER_PATH,
-        "power_transformer": PT_PATH,
-        "label_encoders": LE_PATH,
-    }
+    required = [MODEL_PATH, TFIDF_PATH, SCALER_PATH, PT_PATH]
 
-    missing = [path for path in files.values() if not os.path.isfile(path)]
+    missing = [p for p in required if not os.path.exists(p)]
 
     if missing:
-        st.error("Missing model files:")
-        for path in missing:
-            st.write(path)
-        st.stop()
+        return None, missing
 
-    try:
-        return (
-            joblib.load(MODEL_PATH),
-            joblib.load(TFIDF_PATH),
-            joblib.load(SCALER_PATH),
-            joblib.load(PT_PATH),
-            joblib.load(LE_PATH),
-        )
+    model = joblib.load(MODEL_PATH)
 
-    except Exception as e:
-        st.error(f"Error loading model artifacts: {e}")
-        st.stop()
+    tfidf = joblib.load(TFIDF_PATH)
 
+    scaler = joblib.load(SCALER_PATH)
 
-model, tfidf, scaler, power_transformer, label_encoders = load_artifacts()
+    pt = joblib.load(PT_PATH)
+
+    return (model, tfidf, scaler, pt), []
 
 
 # feature engineering + inference
