@@ -8,7 +8,7 @@ Expects, next to this file:
     models/standard_scaler.pkl
     models/power_transformer.pkl
     models/label_encoders.pkl
-    Customer_support.csv
+    customer_support.csv
 
 Loads the model, TF-IDF vectorizer, scaler, power transformer, and label
 encoders that were fit and saved from the training notebook -- no separate
@@ -1800,7 +1800,7 @@ def page_batch(theme, df, lookups, label_maps, artifacts):
             language=None,
         )
 
-        st.caption("Your original Customer_support.csv schema also works directly.")
+        st.caption("Your original customer_support.csv schema also works directly.")
 
     uploaded = st.file_uploader("Upload ticket CSV", type=["csv"])
 
@@ -2513,7 +2513,7 @@ def main():
         st.markdown(
             "Place the `models/` folder (best_xgboost_classifier.pkl, tfidf_vectorizer.pkl, "
             "standard_scaler.pkl, power_transformer.pkl, label_encoders.pkl) and "
-            "`Customer_support.csv` next to this file, then reload."
+            "`customer_support.csv` next to this file, then reload."
         )
 
         return
