@@ -2558,3 +2558,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Deployment revision: 2026-09-02
